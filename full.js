@@ -1,260 +1,251 @@
 /* ============================================================
-   Page Assets Tool - Structure-Preserved Downloader Version
+   Page Assets Tool (GitHub Pages Version)
    呼び出し: PageAssetsTool();
    ============================================================ */
 
 function PageAssetsTool() {
-
   /* =====================================
-      Utility
+        基本ユーティリティ
   ===================================== */
   function fetchText(url) {
-    return fetch(url, {mode:"cors"}).then(r=>{
-      if(!r.ok) throw new Error("HTTP "+r.status);
+    return fetch(url, { mode: "cors" }).then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
       return r.text();
     });
   }
 
   function fetchBlob(url) {
-    return fetch(url, {mode:"cors"}).then(r=>{
-      if(!r.ok) throw new Error("HTTP "+r.status);
+    return fetch(url, { mode: "cors" }).then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
       return r.blob();
     });
   }
 
-  function downloadBlob(blob, filename){
+  function downloadBlob(blob, filename) {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = filename;
     document.body.appendChild(a);
     a.click();
-    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   }
 
-  /* JSZip ロード */
-  function loadJSZip(){
-    return new Promise((res,rej)=>{
-      if(window.JSZip) return res(window.JSZip);
-      const s=document.createElement("script");
-      s.src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
-      s.onload=()=>res(window.JSZip);
-      s.onerror=()=>rej("JSZip load failed");
+  /* =====================================
+        JSZipロード
+  ===================================== */
+  function loadJSZip() {
+    return new Promise((resolve, reject) => {
+      if (window.JSZip) return resolve(window.JSZip);
+
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+      s.onload = () => resolve(window.JSZip);
+      s.onerror = () => reject("JSZip load error");
       document.body.appendChild(s);
     });
   }
 
   /* =====================================
-      1) ページからアセット一覧を抽出
+       ページからアセット一覧抽出
   ===================================== */
-  function findAssets(doc, baseURL){
-    const out=[];
-    const push=(u,t)=>{
-      if(!u) return;
-      try{
-        const url=new URL(u,baseURL).href;
-        const path = (new URL(url)).pathname.replace(/^\//,"");
-        out.push({
-          url,
-          type:t,
-          file: path || "index.html",   // ← パスをそのまま保持
-        });
-      }catch(e){}
+  function findAssets(doc, baseURL) {
+    const out = [];
+
+    const push = (u, type) => {
+      if (!u) return;
+      try {
+        const url = new URL(u, baseURL).href;
+        const file = (new URL(url)).pathname.replace(/^\//, "") || "index.html";
+        out.push({ url, type, file });
+      } catch (e) { }
     };
 
-    // HTML
     out.push({
       url: baseURL,
-      type:"html",
-      file:"index.html"
+      type: "html",
+      file: "index.html"
     });
 
-    // JS
-    doc.querySelectorAll("script[src]").forEach(s=>push(s.src,"js"));
-
-    // CSS
-    doc.querySelectorAll('link[rel="stylesheet"]').forEach(l=>push(l.href,"css"));
-
-    // IMG
-    doc.querySelectorAll("img").forEach(i=>push(i.src,"img"));
-
-    // VIDEO / AUDIO
-    doc.querySelectorAll("video, audio, source").forEach(m=>{
-      if(m.src) push(m.src,"media");
+    doc.querySelectorAll("script[src]").forEach(s => push(s.src, "js"));
+    doc.querySelectorAll('link[rel="stylesheet"]').forEach(l => push(l.href, "css"));
+    doc.querySelectorAll("img").forEach(i => push(i.src, "img"));
+    doc.querySelectorAll("video,audio,source").forEach(m => {
+      if (m.src) push(m.src, "media");
     });
 
-    // inline CSS 背景画像
-    doc.querySelectorAll("[style]").forEach(el=>{
-      const bg = el.style.backgroundImage || "";
+    // inline CSS background
+    doc.querySelectorAll("[style]").forEach(e => {
+      const bg = e.style.backgroundImage || "";
       const m = bg.match(/url\((['"]?)(.*?)\1\)/);
-      if(m) push(m[2],"img");
+      if (m) push(m[2], "img");
     });
 
-    // 重複削除
-    const map={}; const fin=[];
-    out.forEach(a=>{
-      if(!map[a.url]){
-        map[a.url]=1;
-        fin.push(a);
+    // 重複除去
+    const map = {}, list = [];
+    out.forEach(a => {
+      if (!map[a.url]) {
+        map[a.url] = 1;
+        list.push(a);
       }
     });
 
-    return fin;
+    return list;
   }
 
   /* =====================================
-      2) フォルダ構造維持で ZIP 作成
+       ZIP（フォルダ構造維持）
   ===================================== */
-  function zipAssetsPreserveStructure(doc, urlBase){
-    alert("ページのアセットをフォルダ構造のまま ZIP 化しています…");
+  function zipAssetsStructure(doc, baseURL) {
+    alert("フォルダ構造そのままで ZIP を生成します…");
 
-    return loadJSZip().then(JSZip=>{
+    return loadJSZip().then(JSZip => {
       const zip = new JSZip();
-
-      // index.html を入れる
       zip.file("index.html", doc.documentElement.outerHTML);
 
-      const assets = findAssets(doc, urlBase);
+      const assets = findAssets(doc, baseURL);
 
-      const tasks = assets.map(a=>{
-        if(a.type==="html") return Promise.resolve();
-        return fetchBlob(a.url)
-        .then(blob=>{
-          zip.file(a.file, blob);     // ← ファイルパスそのまま追加
-        })
-        .catch(()=>{});
+      const tasks = assets.map(a => {
+        if (a.type === "html") return;
+        return fetchBlob(a.url).then(blob => {
+          zip.file(a.file, blob);
+        }).catch(() => { });
       });
 
-      return Promise.all(tasks).then(()=>{
-        return zip.generateAsync({type:"blob"});
-      }).then(blob=>{
-        downloadBlob(blob,"assets-structure.zip");
-        alert("フォルダ構造付き ZIP が完成しました！");
+      return Promise.all(tasks).then(() =>
+        zip.generateAsync({ type: "blob" })
+      ).then(blob => {
+        downloadBlob(blob, "assets-structure.zip");
+        alert("ZIP をダウンロードしました！");
       });
     });
   }
 
   /* =====================================
-      3) 外部 HTML 読み込み
+        外部HTML読み込み
   ===================================== */
-  function loadExternalHTML(url){
-    return fetchText(url).then(html=>{
+  function loadExternalHTML(url) {
+    return fetchText(url).then(html => {
       const p = new DOMParser();
-      return p.parseFromString(html,"text/html");
+      return p.parseFromString(html, "text/html");
     });
   }
 
   /* =====================================
-      4) Web See（画像を Base64 埋め込み）
+        Web See（Base64 埋め込み）
   ===================================== */
-  function webSee(url){
-    alert("Web See を開始します…");
+  function webSee(url) {
+    alert("Web See 開始…");
 
-    fetchText(url).then(html=>{
-      const doc = new DOMParser().parseFromString(html,"text/html");
-      const assets = findAssets(doc,url);
+    fetchText(url).then(html => {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const assets = findAssets(doc, url);
 
-      const proms = assets.map(a=>{
-        if(a.type==="html") return Promise.resolve();
-        return fetchBlob(a.url).then(b=>{
-          return new Promise(ok=>{
-            const r=new FileReader();
-            r.onload=()=>{
-              html = html.split(a.url).join(r.result);
-              ok();
-            };
-            r.readAsDataURL(b);
-          });
-        }).catch(()=>{});
+      const ps = assets.map(a => {
+        if (a.type === "html") return Promise.resolve();
+        return fetchBlob(a.url).then(b => new Promise(ok => {
+          const r = new FileReader();
+          r.onload = () => {
+            html = html.split(a.url).join(r.result);
+            ok();
+          };
+          r.readAsDataURL(b);
+        })).catch(() => { });
       });
 
-      Promise.all(proms).then(()=>{
-        const w = window.open("about:blank","_blank");
+      Promise.all(ps).then(() => {
+        const w = window.open("about:blank", "_blank");
         w.document.open();
         w.document.write(html);
         w.document.close();
       });
-    }).catch(e=>{
-      alert("取得失敗: " + e);
     });
   }
 
   /* =====================================
-      Mini Games（そのまま）
+        Mini Games (あなたのHTMLをそのまま入れ替え)
   ===================================== */
   const game1HTML = `
-<!DOCTYPE html><html><head><meta charset="utf-8"><title>Game1</title></head>
-<body><h1>Game 1</h1></body></html>
-`;
-  const game2HTML = game1HTML.replace("1","2");
-  const game3HTML = game1HTML.replace("1","3");
-  const game4HTML = game1HTML.replace("1","4");
-  const game5HTML = game1HTML.replace("1","5");
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Game 1</title></head>
+<body><h1>Game 1</h1></body>
+</html>`;
 
-  function miniGames(){
-    const sel = prompt("Mini Games\n1〜5 を入力");
-    const n = parseInt(sel);
-    if(!n || n<1 || n>5){
-      alert("1〜5を入力してください");
-      return;
-    }
-    const map={1:game1HTML,2:game2HTML,3:game3HTML,4:game4HTML,5:game5HTML};
-    const w = window.open("about:blank","_blank");
+  const game2HTML = game1HTML.replace("1", "2");
+  const game3HTML = game1HTML.replace("1", "3");
+  const game4HTML = game1HTML.replace("1", "4");
+  const game5HTML = game1HTML.replace("1", "5");
+
+  function miniGames() {
+    const s = prompt("Mini Games\n1〜5 を入力");
+    const n = parseInt(s);
+    if (!n || n < 1 || n > 5) return alert("1〜5 を入力してください");
+
+    const map = {
+      1: game1HTML,
+      2: game2HTML,
+      3: game3HTML,
+      4: game4HTML,
+      5: game5HTML
+    };
+
+    const w = window.open("about:blank", "_blank");
     w.document.open();
     w.document.write(map[n]);
     w.document.close();
   }
 
   /* =====================================
-      メニュー
+        メニュー
   ===================================== */
-
-  function mainMenu(){
-    const sel = prompt(
-`Page Assets Tool (Structure-Preserved)
+  function mainMenu() {
+    const s = prompt(
+`Page Assets Tool
 
 1. This Page
 2. Other Page
 3. Other Thing
 
-番号を入力してください：`
+番号を入力：`
     );
 
-    if(sel==="1") menuThisPage();
-    else if(sel==="2") menuOtherPage();
-    else if(sel==="3") menuOtherThing();
+    if (s === "1") menuThisPage();
+    else if (s === "2") menuOtherPage();
+    else if (s === "3") menuOtherThing();
   }
 
-  function menuThisPage(){
-    const sel = prompt("This Page\n\n1. Assets List\n2. DL (Structure ZIP)");
-    if(sel==="1"){
-      const assets=findAssets(document,location.href);
-      alert("Assets:\n\n"+assets.map(a=>a.file+" <= "+a.url).join("\n"));
-    }
-    else if(sel==="2"){
-      zipAssetsPreserveStructure(document, location.href);
+  function menuThisPage() {
+    const s = prompt("This Page\n1. Assets List\n2. DL (Structure ZIP)");
+    if (s === "1") {
+      const list = findAssets(document, location.href);
+      alert("Assets:\n\n" + list.map(a => `${a.file}  <=  ${a.url}`).join("\n"));
+    } else if (s === "2") {
+      zipAssetsStructure(document, location.href);
     }
   }
 
-  function menuOtherPage(){
-    const sel = prompt("Other Page\n\n1. DL (Structure ZIP)\n2. Web See");
-    if(sel==="1"){
+  function menuOtherPage() {
+    const s = prompt("Other Page\n1. DL (Structure ZIP)\n2. Web See");
+    if (s === "1") {
       const url = prompt("URL を入力");
-      if(!url) return;
-      loadExternalHTML(url).then(doc=>{
-        const as = findAssets(doc,url);
-        alert("Assets:\n\n"+as.map(a=>a.file+" <= "+a.url).join("\n"));
-        if(confirm("ZIP で保存しますか？")) zipAssetsPreserveStructure(doc,url);
-      }).catch(e=>alert("取得失敗: "+e));
+      if (!url) return;
+      loadExternalHTML(url).then(doc => {
+        const list = findAssets(doc, url);
+        alert("Assets:\n\n" + list.map(a => `${a.file}  <=  ${a.url}`).join("\n"));
+        if (confirm("ZIP を保存しますか？")) {
+          zipAssetsStructure(doc, url);
+        }
+      });
     }
-    else if(sel==="2"){
+    else if (s === "2") {
       const url = prompt("URL を入力");
-      if(url) webSee(url);
+      if (url) webSee(url);
     }
   }
 
-  function menuOtherThing(){
-    const sel = prompt("Other Thing\n\n1. Mini Games");
-    if(sel==="1") miniGames();
+  function menuOtherThing() {
+    const s = prompt("Other Thing\n1. Mini Games");
+    if (s === "1") miniGames();
   }
 
   /* 起動 */
