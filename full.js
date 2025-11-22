@@ -1,637 +1,372 @@
-/* main.js — All-in-one
-   - Prompt UI
-   - This Page assets listing & per-item DL & ZIP
-   - Remote Assets ZIP & Web See (retry)
-   - HTML Tool (direct-create/edit in new tab)
-   - 5 Mini Games (Blob pages, Dark Metal-ish, sounds, HS in localStorage)
-   - No global "already loaded" blocking so you can reload freely
-   Usage: host on GitHub Pages or load with bookmarklet:
-   javascript:(function(){var s=document.createElement('script');s.src='https://YOUR/user/repo/main.js?'+Date.now();document.body.appendChild(s);})();
-*/
-
 (function(){
 
-/* ----- Config ----- */
-const CONFIG = {
-  JSZIP_CDN: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-  CORS_PROXY: '' // optional proxy base to prefix remote fetches (no trailing slash). e.g. "https://your-proxy.workers.dev"
-};
-
-/* ----- Helpers ----- */
-function promptMenu(title, lines){
-  const text = `${title}\n\n${lines.join('\n')}\n\nキャンセル=戻る`;
-  const r = prompt(text);
-  if(r === null) return null;
-  return r.trim();
-}
-function normalizeUrl(u, base){
-  try { return (new URL(u, base)).href; } catch(e) { return u; }
-}
-function fileNameFromUrl(u){
-  try{ const p=new URL(u).pathname; const name = decodeURIComponent(p.split('/').filter(Boolean).pop()||'file'); return name; }catch(e){ return u.replace(/[^a-z0-9.\-_]/gi,'_'); }
-}
-async function loadScriptOnce(url){
-  return new Promise((res, rej)=>{
-    if(document.querySelector('script[src="'+url+'"]')) return res();
-    const s=document.createElement('script'); s.src=url; s.onload=res; s.onerror=rej; document.head.appendChild(s);
-  });
-}
-async function fetchWithOptionalProxy(url, opts){
-  try{
-    const r = await fetch(url, opts);
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    return r;
-  }catch(e){
-    if(CONFIG.CORS_PROXY){
-      try{
-        const prox = CONFIG.CORS_PROXY.replace(/\/$/,'') + '/' + url;
-        const r2 = await fetch(prox, opts);
-        if(!r2.ok) throw new Error('Proxy HTTP '+r2.status);
-        return r2;
-      }catch(e2){
-        throw e2;
-      }
-    }
-    throw e;
-  }
-}
-function downloadBlob(blob, name){
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(()=>URL.revokeObjectURL(a.href),30000);
-}
-
-/* ----- Asset discovery on current doc ----- */
-function discoverAssets(doc=document){
-  const assets=new Map();
-  try{ assets.set(doc.location.href, {url:doc.location.href, type:'html'}); }catch(e){}
-  Array.from(doc.querySelectorAll('link[rel="stylesheet"],link[rel="icon"],link[rel="preload"]')).forEach(l=>{ if(l.href) assets.set(normalizeUrl(l.href, doc.baseURI), {url:normalizeUrl(l.href, doc.baseURI), type:'css'}); });
-  Array.from(doc.querySelectorAll('script[src]')).forEach(s=>{ if(s.src) assets.set(normalizeUrl(s.src, doc.baseURI), {url:normalizeUrl(s.src, doc.baseURI), type:'js'}); });
-  Array.from(doc.querySelectorAll('img')).forEach(i=>{ const u = i.currentSrc || i.src; if(u) assets.set(normalizeUrl(u, doc.baseURI), {url:normalizeUrl(u, doc.baseURI), type:'image'}); });
-  Array.from(doc.querySelectorAll('video, audio')).forEach(m=>{
-    const u = m.currentSrc || m.src; if(u) assets.set(normalizeUrl(u, doc.baseURI), {url:normalizeUrl(u, doc.baseURI), type:'media'});
-    Array.from(m.querySelectorAll('source')).forEach(s=>{ if(s.src) assets.set(normalizeUrl(s.src, doc.baseURI), {url:normalizeUrl(s.src, doc.baseURI), type:'media'}); });
-  });
-  Array.from(doc.querySelectorAll('style')).forEach(st=>{
-    const txt=st.textContent||''; let re=/url\(([^)]+)\)/g,m;
-    while((m=re.exec(txt))){ let raw=m[1].replace(/['"]/g,'').trim(); if(raw) assets.set(normalizeUrl(raw, doc.baseURI), {url:normalizeUrl(raw, doc.baseURI), type:'asset'}); }
-  });
-  try{
-    Array.from(doc.styleSheets).forEach(ss=>{
-      try{
-        Array.from(ss.cssRules||[]).forEach(rule=>{
-          const txt=rule.cssText||''; let re=/url\(([^)]+)\)/g,m;
-          while((m=re.exec(txt))){ let raw=m[1].replace(/['"]/g,'').trim(); if(raw) assets.set(normalizeUrl(raw, doc.baseURI), {url:normalizeUrl(raw, doc.baseURI), type:'asset'}); }
-        });
-      }catch(e){
-        if(ss.href) assets.set(normalizeUrl(ss.href, doc.baseURI), {url:normalizeUrl(ss.href, doc.baseURI), type:'css'});
-      }
-    });
-  }catch(e){}
-  return Array.from(assets.values());
-}
-
-/* ----- Menus ----- */
-async function mainLoop(){
-  alert('Assets Tool 起動 (promptベースUI)');
-  while(true){
-    const sel = promptMenu('Main Menu', ['1: This Page','2: Other Page','3: Other Thing']);
-    if(sel === null) break;
-    if(sel === '1'){ await thisPageMenu(); }
-    else if(sel === '2'){ await otherPageMenu(); }
-    else if(sel === '3'){ await otherThingMenu(); }
-    else alert('無効な選択');
-  }
-  alert('終了');
-}
-
-async function thisPageMenu(){
-  while(true){
-    const s = promptMenu('This Page', ['1: Assets 一覧 (DL)','2: Assets ZIP (This Page)']);
-    if(s === null) return;
-    if(s === '1') await thisPageList();
-    else if(s === '2') await thisPageZip();
-    else alert('無効');
-  }
-}
-
-async function otherPageMenu(){
-  while(true){
-    const s = promptMenu('Other Page', ['1: Assets DL [URL] (ZIP)','2: Web See (mirror)']);
-    if(s === null) return;
-    if(s === '1'){
-      const url = prompt('Assets DL 対象 URL を入力（キャンセルで戻る）');
-      if(url) await zipRemotePageAssets(url);
-    } else if(s === '2'){
-      await webSeeFlow();
-    } else alert('無効');
-  }
-}
-
-async function otherThingMenu(){
-  while(true){
-    const s = promptMenu('Other Thing', ['1: HTML Tool (direct edit)','2: Mini Games']);
-    if(s === null) return;
-    if(s === '1') openHtmlToolDirect();
-    else if(s === '2') await miniGamesMenu();
-    else alert('無効');
-  }
-}
-
-async function miniGamesMenu(){
-  while(true){
-    const s = promptMenu('Mini Games', ['1: Tap Box','2: Avoider','3: Shooter','4: Memory Tiles','5: 2048 Lite']);
-    if(s === null) return;
-    if(['1','2','3','4','5'].includes(s)) openMiniGame(Number(s));
-    else alert('無効');
-  }
-}
-
-/* ----- This Page list & zip ----- */
-async function thisPageList(){
-  const assets = discoverAssets(document);
-  if(assets.length === 0){ alert('アセット検出なし'); return; }
-  const per = 30;
-  for(let i=0;i<assets.length;i+=per){
-    const chunk = assets.slice(i,i+per);
-    const lines = chunk.map((a,idx)=> `${i+idx+1}: ${fileNameFromUrl(a.url)} — ${a.type}`);
-    const pick = prompt(`${lines.join('\n')}\n\n番号入力でDL（キャンセル=戻る）`);
-    if(pick === null) return;
-    const n = parseInt(pick.trim(),10);
-    if(!isNaN(n) && n >=1 && n <= assets.length){
-      const item = assets[n-1];
-      await downloadDirect(item.url);
-      return;
-    } else {
-      alert('無効な番号'); // continue to next chunk
-    }
-  }
-  const finalPick = prompt(`全 ${assets.length} 件。番号入力でDL（1〜${assets.length}）`);
-  if(finalPick === null) return;
-  const fn = parseInt(finalPick.trim(),10);
-  if(isNaN(fn) || fn<1 || fn>assets.length) { alert('無効'); return; }
-  await downloadDirect(assets[fn-1].url);
-}
-
-async function downloadDirect(url){
-  try{
-    alert('ダウンロード開始: ' + url);
-    const r = await fetchWithOptionalProxy(url);
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const blob = await r.blob();
-    downloadBlob(blob, fileNameFromUrl(url));
-    alert('ダウンロード完了: ' + fileNameFromUrl(url));
-  }catch(e){
-    alert('ダウンロード失敗: ' + (e.message||e));
-    console.error(e);
-  }
-}
-
-async function thisPageZip(){
-  if(!confirm('This Page のアセットを ZIP にまとめます。OK=実行, Cancel=中止')) return;
-  try{
-    await loadScriptOnce(CONFIG.JSZIP_CDN);
-    if(!window.JSZip) throw new Error('JSZip 読み込み失敗');
-    const JSZip = window.JSZip;
-    const zip = new JSZip();
-    zip.file('index.html', document.documentElement.outerHTML);
-    const assets = discoverAssets(document);
-    const folder = zip.folder('assets');
-    for(const a of assets){
-      try{
-        const r = await fetchWithOptionalProxy(a.url);
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        const blob = await r.blob();
-        const name = fileNameFromUrl(a.url);
-        folder.file(name, blob);
-      }catch(e){
-        console.warn('skip asset', a.url, e);
-      }
-    }
-    const content = await zip.generateAsync({type:'blob'});
-    downloadBlob(content, 'thispage-assets.zip');
-    alert('ZIP 完了');
-  }catch(e){
-    alert('ZIP 作成失敗: ' + (e.message||e));
-    console.error(e);
-  }
-}
-
-/* ----- Remote ZIP & parsing ----- */
-function parseAssetUrlsFromHtml(html, base){
-  const set = new Set();
-  let re = /<(?:link|script|img|source)[^>]*(?:href|src)\s*=\s*["']?([^"'\s>]+)["']?/ig, m;
-  while((m = re.exec(html))){ set.add(normalizeUrl(m[1], base)); }
-  re = /url\(([^)]+)\)/ig;
-  while((m = re.exec(html))){ let u=m[1].replace(/['"]/g,'').trim(); set.add(normalizeUrl(u, base)); }
-  return Array.from(set);
-}
-
-async function zipRemotePageAssets(pageUrl){
-  try{
-    if(!confirm('Remote ZIP 実行しますか？ OK=実行')) return;
-    // fetch page with retry loop
-    let html = null;
-    while(true){
-      try{
-        alert('ページ取得: ' + pageUrl);
-        const r = await fetchWithOptionalProxy(pageUrl, {mode:'cors'});
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        html = await r.text();
-        break;
-      }catch(e){
-        console.error('page fetch failed', e);
-        const again = confirm('ページ取得失敗: '+(e.message||e)+'\n再試行しますか？');
-        if(!again) return;
-      }
-    }
-    await loadScriptOnce(CONFIG.JSZIP_CDN);
-    const JSZip = window.JSZip;
-    if(!JSZip) throw new Error('JSZip読み込み失敗');
-    const zip = new JSZip();
-    zip.file('index.html', html);
-    const assets = parseAssetUrlsFromHtml(html, pageUrl);
-    const folder = zip.folder('assets');
-    const failed = [];
-    for(const u of assets){
-      let fetched=false;
-      while(!fetched){
-        try{
-          const r = await fetchWithOptionalProxy(u);
-          if(!r.ok) throw new Error('HTTP '+r.status);
-          const blob = await r.blob();
-          const path = (new URL(u)).pathname.replace(/^\//,'') || fileNameFromUrl(u);
-          folder.file(path, blob);
-          fetched=true;
-        }catch(e){
-          console.warn('asset fetch fail', u, e);
-          const retry = confirm('アセット取得失敗: '+u+'\n再試行しますか？ (OK=再試行 / Cancel=スキップ)');
-          if(!retry){ failed.push(u); break; }
-        }
-      }
-    }
-    const content = await zip.generateAsync({type:'blob'});
-    downloadBlob(content, 'remote-assets.zip');
-    alert('Remote ZIP 完了。失敗数: '+failed.length);
-  }catch(e){
-    alert('Remote ZIP エラー: '+(e.message||e));
-    console.error(e);
-  }
-}
-
-/* ----- Web See flow (mirror with retries) ----- */
-async function webSeeFlow(){
-  while(true){
-    const url = prompt('Web See 対象URLを入力（キャンセルで戻る）');
-    if(!url) return;
-    const ok = await webSeeMirrorWithRetry(url);
-    if(ok) return;
-    const cont = confirm('Web See に失敗しました。再試行しますか？（OK=再試行 / Cancel=戻る）');
-    if(!cont) return;
-  }
-}
-
-async function webSeeMirrorWithRetry(pageUrl){
-  try{
-    // fetch HTML
-    let html = null;
-    while(true){
-      try{
-        alert('ページ取得: '+pageUrl);
-        const r = await fetchWithOptionalProxy(pageUrl, {mode:'cors'});
-        if(!r.ok) throw new Error('HTTP '+r.status);
-        html = await r.text();
-        break;
-      }catch(e){
-        console.error('page fetch failed', e);
-        const retry = confirm('ページ取得失敗: '+(e.message||e)+'\n再試行しますか？');
-        if(!retry) return false;
-      }
-    }
-    const assets = parseAssetUrlsFromHtml(html, pageUrl);
-    alert('検出アセット数: '+assets.length);
-    const blobMap = {};
-    for(const u of assets){
-      let ok=false;
-      while(!ok){
-        try{
-          const r = await fetchWithOptionalProxy(u);
-          if(!r.ok) throw new Error('HTTP '+r.status);
-          const blob = await r.blob();
-          blobMap[u] = URL.createObjectURL(blob);
-          ok=true;
-        }catch(e){
-          console.warn('asset fetch fail', u, e);
-          const retry = confirm('アセット取得失敗: '+u+'\n再試行しますか？ (OK=再試行 / Cancel=スキップ)');
-          if(!retry) break;
-        }
-      }
-    }
-    // rewrite html replacing urls with blob urls
-    let rewritten = html;
-    Object.keys(blobMap).forEach(orig=>{
-      const b = blobMap[orig];
-      rewritten = rewritten.split(orig).join(b);
-      try{
-        const p = (new URL(orig)).pathname;
-        rewritten = rewritten.split(p).join(b);
-      }catch(e){}
-    });
-    rewritten = rewritten.replace(/<head([^>]*)>/i, `<head$1><base href="${pageUrl}">`);
-    const blob = new Blob([rewritten], {type:'text/html'});
-    window.open(URL.createObjectURL(blob), '_blank');
-    alert('ミラーを新タブで開きました');
-    return true;
-  }catch(e){
-    alert('Web See エラー: '+(e.message||e));
-    console.error(e);
-    return false;
-  }
-}
-
-/* ----- HTML Tool (direct create & edit) ----- */
-function openHtmlToolDirect(){
-  const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HTML Tool (Direct)</title>
+/////////////////////////////
+// Safe New Tab HTML builder
+/////////////////////////////
+function openBlobHTML(bodyJS){
+    const html = `
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-body{margin:0;font-family:system-ui;background:#0b0b0d;color:#eee}
-.header{display:flex;justify-content:space-between;align-items:center;padding:12px}
-.controls button{margin-left:8px;padding:8px 10px;border-radius:6px;background:#111;border:1px solid #333;color:#fff}
-.container{display:flex;gap:12px;padding:12px;flex-wrap:wrap}
-.left{width:320px}
-.file{background:#0f0f10;border:1px solid #222;padding:8px;margin-bottom:8px;border-radius:8px}
-textarea{width:100%;height:60vh;background:#0b0b0f;color:#fff;border:1px solid #222;padding:8px;font-family:monospace}
+body { margin:0; background:black; color:white; font-family:sans-serif; }
+#loading { color:white; font-size:20px; padding:20px; }
 </style>
-</head><body>
-<div class="header"><div><strong>HTML Tool (Direct)</strong></div><div class="controls"><button id="new">New</button><button id="zip">Zip</button><button id="combine">Combine</button><button id="preview">Preview</button></div></div>
-<div class="container"><div class="left"><div id="files"></div></div><div class="right" style="flex:1"><div id="editor"><div style="color:#aaa">Select a file</div></div></div></div>
+</head>
+<body>
+<div id="loading">Loading...</div>
 <script>
-(function(){
-  const files = []; // {name, text}
-  const filesEl = document.getElementById('files');
-  const editorEl = document.getElementById('editor');
-  function renderFiles(){
-    filesEl.innerHTML = '';
-    if(files.length===0){ filesEl.innerHTML='<div style="color:#888">No files</div>'; return; }
-    files.forEach((f,i)=>{
-      const d=document.createElement('div'); d.className='file';
-      const nm=document.createElement('div'); nm.textContent=f.name; nm.style.fontWeight='700';
-      const btnEdit=document.createElement('button'); btnEdit.textContent='Edit'; btnEdit.onclick=()=>openEditor(i);
-      const btnDL=document.createElement('button'); btnDL.textContent='Download'; btnDL.style.marginLeft='6px'; btnDL.onclick=()=>{ const b=new Blob([f.text],{type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=f.name; a.click(); };
-      const btnDel=document.createElement('button'); btnDel.textContent='Delete'; btnDel.style.marginLeft='6px'; btnDel.onclick=()=>{ if(confirm('Delete '+f.name+'?')){ files.splice(i,1); renderFiles(); editorEl.innerHTML='<div style="color:#aaa">Select a file</div>'; } };
-      d.appendChild(nm); d.appendChild(btnEdit); d.appendChild(btnDL); d.appendChild(btnDel);
-      filesEl.appendChild(d);
+window.onload = function(){
+    document.getElementById('loading').remove();
+    ${bodyJS}
+};
+<\/script>
+</body>
+</html>
+`;
+    const b = new Blob([html], {type:"text/html"});
+    const url = URL.createObjectURL(b);
+    window.open(url, "_blank");
+}
+
+/////////////////////////////
+// UI
+/////////////////////////////
+function menu(title, options){
+    let t = title + "\n\n";
+    options.forEach((o,i)=>t += (i+1)+": "+o+"\n");
+    t += "\nキャンセル = 戻る";
+    const s = prompt(t);
+    if(s===null) return null;
+    const n = Number(s);
+    if(n>=1 && n<=options.length) return n;
+    return null;
+}
+
+/////////////////////////////
+// Main Menu
+/////////////////////////////
+function mainMenu(){
+    while(true){
+        const n = menu("Main Menu",[
+            "This Page",
+            "Other Page",
+            "Other Thing"
+        ]);
+        if(n===null) return;
+        if(n===1) menuThis();
+        if(n===2) menuOther();
+        if(n===3) menuThing();
+    }
+}
+
+/////////////////////////////
+// This Page
+/////////////////////////////
+function menuThis(){
+    while(true){
+        const n = menu("This Page",[
+            "Assets List",
+            "Assets DL (準備中)"
+        ]);
+        if(n===null) return;
+        if(n===1) listAssets();
+        if(n===2) alert("次回実装");
+    }
+}
+
+/////////////////////////////
+// Other Page
+/////////////////////////////
+function menuOther(){
+    while(true){
+        const n = menu("Other Page",[
+            "Assets DL[URL](準備中)",
+            "Web See"
+        ]);
+        if(n===null) return;
+        if(n===1) alert("次回実装");
+        if(n===2) webSee();
+    }
+}
+
+/////////////////////////////
+// Other Thing
+/////////////////////////////
+function menuThing(){
+    while(true){
+        const n = menu("Other Thing",[
+            "HTML Tool",
+            "Mini Games"
+        ]);
+        if(n===null) return;
+        if(n===1) openHTMLTool();
+        if(n===2) menuGames();
+    }
+}
+
+/////////////////////////////
+// Assets Scanner
+/////////////////////////////
+function listAssets(){
+    const exts=[
+        ".html",".css",".js",".png",".jpg",".jpeg",".svg",
+        ".mp3",".wav",".m4a",".mp4",".mov",".ttf",".otf"
+    ];
+    const set=new Set();
+
+    document.querySelectorAll("*").forEach(el=>{
+        ["src","href","poster"].forEach(a=>{
+            const u=el[a];
+            if(!u) return;
+            const l=u.toLowerCase();
+            exts.forEach(e=>{
+                if(l.includes(e)) set.add(u);
+            });
+        });
     });
-  }
-  function openEditor(idx){
-    const f = files[idx];
-    editorEl.innerHTML = '';
-    const title=document.createElement('div'); title.textContent=f.name; title.style.fontWeight='700';
-    const ta=document.createElement('textarea'); ta.value=f.text;
-    const btnSave=document.createElement('button'); btnSave.textContent='Save'; btnSave.onclick=()=>{ files[idx].text = ta.value; alert('Saved'); renderFiles(); };
-    editorEl.appendChild(title); editorEl.appendChild(ta); editorEl.appendChild(btnSave);
-  }
-  document.getElementById('new').onclick = ()=>{
-    const nm = prompt('Filename (e.g. index.html, style.css)');
-    if(!nm) return;
-    const sample = nm.match(/\\.html?$/i) ? '<!doctype html>\\n<html>\\n<head><meta charset=\"utf-8\"><title>'+nm+'</title></head>\\n<body>\\n<h1>'+nm+'</h1>\\n</body>\\n</html>' : '';
-    files.push({name: nm, text: sample});
-    renderFiles();
-  };
-  document.getElementById('zip').onclick = async ()=>{
-    if(files.length===0){ alert('No files'); return; }
-    if(!window.JSZip){ const s=document.createElement('script'); s.src='${CONFIG.JSZIP_CDN}'; document.head.appendChild(s); await new Promise(r=>s.onload=r); }
-    const zip=new JSZip();
-    files.forEach(f=>zip.file(f.name, f.text));
-    const blob = await zip.generateAsync({type:'blob'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='files.zip'; a.click();
-  };
-  document.getElementById('combine').onclick = ()=>{
-    if(files.length===0){ alert('No files'); return; }
-    const htmlFile = files.find(x=>x.name.match(/\\.html?$/i)) || {text:'<!doctype html>\\n<html><head><meta charset=\"utf-8\"><title>Combined</title></head><body></body></html>'};
-    let out = htmlFile.text;
-    const cssText = files.filter(f=>f.name.match(/\\.css$/i)).map(f=>'/* '+f.name+' */\\n'+f.text).join('\\n');
-    const jsText = files.filter(f=>f.name.match(/\\.js$/i)).map(f=>'// '+f.name+'\\n'+f.text).join('\\n');
-    out = out.replace(/<\\/head>/i, '<style>\\n'+cssText+'\\n</style>\\n</head>');
-    out = out.replace(/<\\/body>/i, '<script>\\n'+jsText+'\\n</script>\\n</body>');
-    const blob = new Blob([out], {type:'text/html'});
-    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='combined.html'; a.click();
-  };
-  document.getElementById('preview').onclick = ()=>{
-    if(files.length===0){ alert('No files'); return; }
-    const htmlFile = files.find(x=>x.name.match(/\\.html?$/i)) || null;
-    let out='';
-    if(htmlFile){
-      out = htmlFile.text;
-      const cssText = files.filter(f=>f.name.match(/\\.css$/i)).map(f=>'/* '+f.name+' */\\n'+f.text).join('\\n');
-      const jsText = files.filter(f=>f.name.match(/\\.js$/i)).map(f=>'// '+f.name+'\\n'+f.text).join('\\n');
-      out = out.replace(/<\\/head>/i, '<style>\\n'+cssText+'\\n</style>\\n</head>');
-      out = out.replace(/<\\/body>/i, '<script>\\n'+jsText+'\\n</script>\\n</body>');
-    } else {
-      out = '<!doctype html>\\n<html><head><meta charset=\"utf-8\"><title>Preview</title></head><body><h3>Preview</h3></body></html>';
+
+    if(!set.size){ alert("なし"); return; }
+
+    const arr=[...set];
+    while(true){
+        let t="Assets List\n\n";
+        arr.forEach((u,i)=>t+=(i+1)+": "+u+"\n");
+        t+="\n番号入力でDL、キャンセル戻る";
+        const s=prompt(t);
+        if(s===null) return;
+        const i=+s-1;
+        if(arr[i]) window.open(arr[i]);
     }
-    window.open(URL.createObjectURL(new Blob([out], {type:'text/html'})), '_blank');
-  };
-  renderFiles();
-})();
-</script>
-</body></html>`;
-  const u = URL.createObjectURL(new Blob([html], {type:'text/html'}));
-  window.open(u, '_blank');
 }
 
-/* ----- Mini Games — full (Dark Metal-ish + sfx + HS) ----- */
-
-function openMiniGame(n){
-  const htmls = [game1HTML(), game2HTML(), game3HTML(), game4HTML(), game5HTML()];
-  const content = htmls[n-1] || '<!doctype html><html><body>Not found</body></html>';
-  const url = URL.createObjectURL(new Blob([content], {type:'text/html'}));
-  window.open(url, '_blank');
+/////////////////////////////
+// Web See
+/////////////////////////////
+function webSee(){
+    const url = prompt("URL 入力\nキャンセル→戻る");
+    if(url===null) return;
+    fetch(url)
+    .then(r=>r.text())
+    .then(html=>{
+        const b=new Blob([html],{type:"text/html"});
+        window.open(URL.createObjectURL(b),"_blank");
+    })
+    .catch(()=>{
+        alert("失敗。再試行します");
+        webSee();
+    });
 }
 
-/* Game 1: Tap Box */
-function game1HTML(){
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Tap Box</title>
-<style>
-:root{--bg:#050506;--accent:#ff4b4b;--panel:#0f0f12;color:#eee}
-body{margin:0;background:linear-gradient(180deg,#030304,#050506);font-family:system-ui;color:var(--panel);overflow:hidden}
-#hud{position:fixed;right:12px;top:12px;color:#eee}
-#exit{position:fixed;left:12px;top:12px}
-canvas{display:block}
-.score{color:var(--accent);font-weight:700}
-</style></head><body>
-<button id="exit">Exit</button>
-<div id="hud">Score: <span id="score">0</span> High: <span id="high">0</span></div>
-<canvas id="cv"></canvas>
-<script>
-(function(){
-  const cv=document.getElementById('cv'); const ctx=cv.getContext('2d');
-  function resize(){ cv.width=innerWidth; cv.height=innerHeight; } addEventListener('resize', resize); resize();
-  let targets=[], score=0;
-  const HS='tapbox_hs'; let high = localStorage.getItem(HS)|0; document.getElementById('high').textContent = high;
-  const AC = new (window.AudioContext||window.webkitAudioContext)();
-  function playBeep(freq, t=0.08){ const o=AC.createOscillator(), g=AC.createGain(); o.type='sine'; o.frequency.value=freq; o.connect(g); g.connect(AC.destination); g.gain.value=0.0001; o.start(); g.gain.exponentialRampToValueAtTime(0.5, AC.currentTime+0.01); g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime+t); setTimeout(()=>o.stop(), t*1000+60); }
-  function spawn(){ const s=40+Math.random()*80; const x=Math.random()*(cv.width-s); const y=Math.random()*(cv.height-s); targets.push({x,y,w:s,ts:Date.now()}); }
-  setInterval(spawn,700);
-  function draw(){
-    ctx.clearRect(0,0,cv.width,cv.height);
-    // bg stripes
-    for(let i=0;i<6;i++){ ctx.fillStyle = i%2? 'rgba(255,255,255,0.01)':'rgba(255,75,75,0.01)'; ctx.fillRect(0,i*(cv.height/6),cv.width,cv.height/6); }
-    for(let i=targets.length-1;i>=0;i--){
-      const t=targets[i]; const age=(Date.now()-t.ts)/1000; const p = 1 + Math.sin(age*6)*0.06;
-      ctx.save(); ctx.translate(t.x+t.w/2,t.y+t.w/2); ctx.scale(p,p);
-      ctx.fillStyle='rgba(255,75,75,0.12)'; ctx.fillRect(-t.w/2,-t.w/2,t.w,t.w);
-      ctx.strokeStyle='#ff4b4b'; ctx.lineWidth=3; ctx.strokeRect(-t.w/2,-t.w/2,t.w,t.w);
-      ctx.restore();
-      if(age>4){ targets.splice(i,1); score = Math.max(0, score-1); document.getElementById('score').textContent = score; }
+/////////////////////////////
+// Mini Games Menu
+/////////////////////////////
+function menuGames(){
+    while(true){
+        const n = menu("Mini Games",[
+            "Game 1: Tap Box",
+            "Game 2: Avoider",
+            "Game 3: Shooter",
+            "Game 4: Memory",
+            "Game 5: 2048"
+        ]);
+        if(n===null) return;
+        openGame(n);
     }
-    requestAnimationFrame(draw);
-  }
-  cv.addEventListener('pointerdown', e=>{
-    const r=cv.getBoundingClientRect(); const px=e.clientX-r.left, py=e.clientY-r.top;
-    for(let i=targets.length-1;i>=0;i--){
-      const t=targets[i];
-      if(px>=t.x && px<=t.x+t.w && py>=t.y && py<=t.y+t.w){
-        // hit
-        playBeep(800+Math.random()*600,0.08);
-        createExplosion(t.x+t.w/2,t.y+t.w/2);
-        targets.splice(i,1); score++; document.getElementById('score').textContent = score;
-        if(score > (localStorage.getItem(HS)|0)){ localStorage.setItem(HS, score); document.getElementById('high').textContent = score; }
-        return;
-      }
-    }
-  });
-  function createExplosion(cx,cy){
-    let r=0; const id=setInterval(()=>{ ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.strokeStyle='rgba(255,200,120,'+(0.8-r/120)+')'; ctx.lineWidth=3; ctx.stroke(); r+=8; if(r>120){ clearInterval(id); } },16);
-  }
-  draw();
-  document.getElementById('exit').onclick = ()=>{ if(confirm('Exit?')) window.close(); };
-})();
-<\/script></body></html>`;
 }
 
-/* Game 2: Avoider */
-function game2HTML(){
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Avoider</title>
-<style>body{margin:0;background:#050507;color:#fff;font-family:system-ui}canvas{display:block}</style></head><body>
-<canvas id="g"></canvas><button id="exit" style="position:fixed;left:12px;bottom:12px">Exit</button>
-<script>
-(function(){
-  const c=document.getElementById('g'), ctx=c.getContext('2d');
-  function resize(){ c.width=innerWidth; c.height=innerHeight; } addEventListener('resize', resize); resize();
-  let player={x:c.width/2,y:c.height-80,r:18}, obs=[], score=0;
-  const HS='avoider_hs'; document.title='Avoider';
-  const AC = new (window.AudioContext||window.webkitAudioContext)();
-  function sfx(){ const o=AC.createOscillator(),g=AC.createGain(); o.type='square'; o.frequency.value=180; o.connect(g); g.connect(AC.destination); g.gain.value=0.0001; o.start(); g.gain.exponentialRampToValueAtTime(0.5,AC.currentTime+0.01); g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+0.08); setTimeout(()=>o.stop(),120); }
-  function spawn(){ const w=30+Math.random()*70; obs.push({x:Math.random()*(c.width-w), y:-w, w, vy:2+Math.random()*2}); }
-  setInterval(spawn,600);
-  function update(){
-    for(let i=obs.length-1;i>=0;i--){ obs[i].y += obs[i].vy; if(obs[i].y > c.height){ obs.splice(i,1); score++; } }
-    for(const o of obs){ const dx=o.x+o.w/2-player.x; const dy=o.y+o.w/2-player.y; if(Math.hypot(dx,dy) < o.w/2 + player.r -2){ sfx(); if(confirm('Game Over\\nScore: '+score+'\\nOK=Retry / Cancel=Exit')){ obs=[]; score=0; } else { window.close(); return; } } }
+/////////////////////////////
+// HTML Tool
+/////////////////////////////
+function openHTMLTool(){
+openBlobHTML(`
+let wrap=document.createElement('div');
+wrap.innerHTML=\`
+<textarea id="ta" style="width:100%;height:80%;background:#111;color:#0f0;">
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset='utf-8'>
+<title>My Page</title>
+</head>
+<body>
+Hello!
+</body>
+</html>
+</textarea>
+<br>
+<button id="runBtn">Run</button>
+\`;
+document.body.appendChild(wrap);
+
+runBtn.onclick=()=>{
+ let code=document.getElementById('ta').value;
+ let b=new Blob([code],{type:'text/html'});
+ window.open(URL.createObjectURL(b));
+};
+`);
+}
+
+/////////////////////////////
+// Game Bodies
+/////////////////////////////
+
+function openGame(n){
+    if(n===1) game1();
+    if(n===2) game2();
+    if(n===3) game3();
+    if(n===4) game4();
+    if(n===5) game5();
+}
+
+// 1: Tap Box
+function game1(){
+openBlobHTML(`
+let box=document.createElement('div');
+Object.assign(box.style,{
+ position:'absolute',width:'60px',height:'60px',
+ background:'red',borderRadius:'10px'
+});
+document.body.appendChild(box);
+function move(){
+ box.style.left=(Math.random()*(innerWidth-60))+'px';
+ box.style.top=(Math.random()*(innerHeight-60))+'px';
+}
+move();
+box.onclick=()=>{
+ score++; move();
+};
+let score=0;
+setInterval(()=>{
+ document.title='Score:'+score;
+},200);
+`);
+}
+
+// 2: 避けゲー（簡易）
+function game2(){
+openBlobHTML(`
+document.body.innerHTML='';
+let player=document.createElement('div');
+Object.assign(player.style,{
+ position:'absolute',width:'40px',height:'40px',
+ background:'cyan',left:'50%',top:'80%'
+});
+document.body.appendChild(player);
+
+let speed=3,alive=true;
+function spawn(){
+ let e=document.createElement('div');
+ Object.assign(e.style,{position:'absolute',width:'20px',height:'20px',background:'yellow'});
+ e.style.left=Math.random()*(innerWidth-20)+'px';
+ e.style.top='0px';
+ document.body.appendChild(e);
+ let int=setInterval(()=>{
+  if(!alive){clearInterval(int);e.remove();return;}
+  let y=parseFloat(e.style.top)+speed;
+  e.style.top=y+'px';
+  if(y>innerHeight-40){
+   // check hit
+   let px=parseFloat(player.style.left);
+   let ex=parseFloat(e.style.left);
+   if(Math.abs(px-ex)<40){
+    alive=false;
+    alert('GAME OVER');
+   }
+   clearInterval(int);
+   e.remove();
   }
-  function draw(){ ctx.clearRect(0,0,c.width,c.height); const g=ctx.createLinearGradient(0,0,0,c.height); g.addColorStop(0,'#070708'); g.addColorStop(1,'#0b0b0d'); ctx.fillStyle=g; ctx.fillRect(0,0,c.width,c.height); ctx.fillStyle='#33aaff'; ctx.beginPath(); ctx.arc(player.x,player.y,player.r,0,Math.PI*2); ctx.fill(); obs.forEach(o=>{ ctx.fillStyle='#ff6666'; ctx.fillRect(o.x,o.y,o.w,o.w); }); ctx.fillStyle='#fff'; ctx.fillText('Score: '+score,12,24); }
-  addEventListener('pointermove', e=>{ const r=c.getBoundingClientRect(); player.x = e.clientX - r.left; });
-  addEventListener('touchmove', e=>{ const t=e.touches[0]; const r=c.getBoundingClientRect(); player.x = t.clientX - r.left; e.preventDefault(); });
-  function loop(){ update(); draw(); requestAnimationFrame(loop); }
-  loop();
-  document.getElementById('exit').onclick = ()=>{ if(confirm('Exit?')) window.close(); };
-})();
-<\/script></body></html>`;
+ },20);
+}
+setInterval(()=>spawn(),600);
+
+document.addEventListener('mousemove',e=>{
+ player.style.left=e.clientX+'px';
+});
+`);
 }
 
-/* Game 3: Shooter */
-function game3HTML(){
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shooter</title>
-<style>body{margin:0;background:#050507;color:#fff}canvas{display:block}</style></head><body>
-<canvas id="c"></canvas><button id="exit" style="position:fixed;left:12px;bottom:12px">Exit</button>
-<script>
-(function(){
-  const c=document.getElementById('c'), ctx=c.getContext('2d'); function resize(){ c.width=innerWidth; c.height=innerHeight; } addEventListener('resize', resize); resize();
-  let ship={x:c.width/2,y:c.height-80,w:36,h:20}, bullets=[], enemies=[], score=0;
-  const HS='shooter_hs';
-  const AC = new (window.AudioContext||window.webkitAudioContext)();
-  function shotSfx(){ const o=AC.createOscillator(),g=AC.createGain(); o.type='sawtooth'; o.frequency.value=1200; o.connect(g); g.connect(AC.destination); g.gain.value=0.0001; o.start(); g.gain.exponentialRampToValueAtTime(0.5,AC.currentTime+0.01); g.gain.exponentialRampToValueAtTime(0.0001,AC.currentTime+0.12); setTimeout(()=>o.stop(),150); }
-  function spawn(){ enemies.push({x:Math.random()*(c.width-40)+20,y:-40,vy:1+Math.random()*2,w:28}); }
-  setInterval(spawn,500);
-  function update(dt){
-    bullets.forEach(b=> b.y -= 600*dt);
-    enemies.forEach(e=> e.y += e.vy + dt*20);
-    for(let i=enemies.length-1;i>=0;i--){
-      const e=enemies[i];
-      for(let j=bullets.length-1;j>=0;j--){
-        const b=bullets[j];
-        if(b.x > e.x && b.x < e.x+e.w && b.y > e.y && b.y < e.y+e.w){
-          bullets.splice(j,1); enemies.splice(i,1); score+=10; if(score > (localStorage.getItem(HS)|0)) localStorage.setItem(HS, score);
-          break;
-        }
-      }
-    }
+// 3: Shooter（簡略）
+function game3(){
+openBlobHTML(`
+document.body.innerHTML='';
+let p=document.createElement('div');
+Object.assign(p.style,{
+ position:'absolute',width:'50px',height:'50px',
+ background:'lime',bottom:'0px',left:'50%'
+});
+document.body.appendChild(p);
+
+document.body.style.overflow='hidden';
+let bullets=[];
+document.addEventListener('click',()=>{
+ let b=document.createElement('div');
+ Object.assign(b.style,{position:'absolute',width:'5px',height:'20px',background:'white'});
+ b.style.left=p.style.left;
+ b.style.bottom='50px';
+ bullets.push(b);
+ document.body.appendChild(b);
+});
+setInterval(()=>{
+ bullets.forEach((b,i)=>{
+  b.style.bottom=(parseFloat(b.style.bottom)+8)+'px';
+  if(parseFloat(b.style.bottom)>innerHeight){
+   b.remove();bullets.splice(i,1);
   }
-  function draw(){ ctx.clearRect(0,0,c.width,c.height); const g=ctx.createLinearGradient(0,0,0,c.height); g.addColorStop(0,'#070708'); g.addColorStop(1,'#0b0b0d'); ctx.fillStyle=g; ctx.fillRect(0,0,c.width,c.height); ctx.fillStyle='#8bdcff'; ctx.fillRect(ship.x,ship.y,ship.w,ship.h); ctx.fillStyle='#ffd266'; bullets.forEach(b=>ctx.fillRect(b.x-2,b.y-8,4,8)); ctx.fillStyle='#ff7b7b'; enemies.forEach(e=> ctx.fillRect(e.x,e.y,e.w,e.w)); ctx.fillStyle='#fff'; ctx.fillText('Score: '+score,12,20); }
-  let last=performance.now();
-  function loop(t){ const dt=(t-last)/1000; last=t; update(dt); draw(); requestAnimationFrame(loop); }
-  loop();
-  addEventListener('pointermove', e=>{ ship.x = Math.max(0, Math.min(c.width-ship.w, e.clientX - 18)); });
-  addEventListener('pointerdown', e=>{ bullets.push({x: ship.x + ship.w/2, y: ship.y}); shotSfx(); });
-  addEventListener('keydown', e=>{ if(e.code==='Space'){ bullets.push({x: ship.x + ship.w/2, y: ship.y}); shotSfx(); } });
-  document.getElementById('exit').onclick = ()=>{ if(confirm('Exit?')) window.close(); };
-})();
-<\/script></body></html>`;
+ });
+},20);
+
+document.addEventListener('mousemove',e=>{
+ p.style.left=e.clientX+'px';
+});
+`);
 }
 
-/* Game 4: Memory Tiles */
-function game4HTML(){
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Memory Tiles</title>
-<style>body{margin:0;background:#060607;color:#eee;font-family:system-ui;display:flex;flex-direction:column;align-items:center} .board{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;width:min(720px,92vw);padding:10px} .tile{background:#111;border-radius:10px;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center;font-size:24px;cursor:pointer;border:1px solid #222} .tile.revealed{background:#222;color:#ffd266}</style></head><body>
-<h2>Memory Tiles</h2><div class="board" id="board"></div><button id="exit" style="position:fixed;left:12px;bottom:12px">Exit</button>
-<script>
-(function(){
-  const board=document.getElementById('board'); const icons=['✦','✹','✺','✷','✵','✶','✸','✻']; let tiles=[], first=null, second=null, moves=0, score=0;
-  const HS='memory_hs'; let high=localStorage.getItem(HS)|0;
-  function init(){ const arr = icons.concat(icons); for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; } tiles = arr.map((v,i)=>({id:i,val:v,found:false,revealed:false})); render(); }
-  function render(){ board.innerHTML=''; tiles.forEach(t=>{ const d=document.createElement('div'); d.className='tile'+(t.revealed||t.found?' revealed':''); d.textContent=(t.revealed||t.found)?t.val:''; d.onclick=()=>clickTile(t); board.appendChild(d); }); }
-  function clickTile(t){ if(t.revealed||t.found) return; t.revealed=true; if(!first) first=t; else if(!second){ second=t; moves++; setTimeout(check,400); } render(); }
-  function check(){ if(!first||!second) return; if(first.val===second.val){ first.found=true; second.found=true; score+=10; if(score>high){ high=score; localStorage.setItem(HS, high);} } else { first.revealed=false; second.revealed=false; score=Math.max(0,score-2); } first=null; second=null; render(); if(tiles.every(t=>t.found)){ if(confirm('All matched! Score: '+score+'\\nOK=Play again')) init(); } }
-  init();
-  document.getElementById('exit').onclick = ()=>{ if(confirm('Exit?')) window.close(); };
-})();
-<\/script></body></html>`;
-}
-
-/* Game 5: 2048 Lite */
-function game5HTML(){
-  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>2048 Lite</title>
-<style>body{margin:0;background:#050507;color:#fff;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh}.container{width:min(420px,92vw)}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;background:#0b0b0d;padding:12px;border-radius:12px}.cell{width:80px;height:80px;background:#101014;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:24px}</style></head><body>
-<div class="container"><div class="hud">Score: <span id="score">0</span> High: <span id="high">0</span></div><div class="grid" id="grid"></div><div style="margin-top:8px"><button id="reset">Reset</button><button id="exit">Exit</button></div></div>
-<script>
-(function(){
-  const gridEl=document.getElementById('grid'), scoreEl=document.getElementById('score'), highEl=document.getElementById('high');
-  const HS='2048_hs'; highEl.textContent = localStorage.getItem(HS)|0;
-  let grid = Array.from({length:16},()=>0), score=0;
-  function spawn(){ const empties = grid.map((v,i)=>v===0?i:-1).filter(v=>v>=0); if(empties.length===0) return; const idx=empties[Math.floor(Math.random()*empties.length)]; grid[idx]= Math.random()<0.9?2:4; render(); }
-  function render(){ gridEl.innerHTML=''; grid.forEach(v=>{ const d=document.createElement('div'); d.className='cell'; d.textContent = v===0?'':v; gridEl.appendChild(d); }); scoreEl.textContent=score; }
-  function move(dir){
-    let moved=false; const mat=[[],[],[],[]];
-    for(let r=0;r<4;r++) for(let c=0;c<4;c++) mat[r][c]=grid[r*4+c];
-    function compress(arr){ const out=arr.filter(x=>x!==0); for(let i=0;i<out.length-1;i++){ if(out[i]===out[i+1]){ out[i]*=2; score+=out[i]; out.splice(i+1,1); } } while(out.length<4) out.push(0); return out; }
-    let newMat=JSON.parse(JSON.stringify(mat));
-    if(dir==='left'){ for(let r=0;r<4;r++){ const tmp=compress(mat[r]); for(let c=0;c<4;c++){ newMat[r][c]=tmp[c]; if(newMat[r][c]!==mat[r][c]) moved=true; } } }
-    if(dir==='right'){ for(let r=0;r<4;r++){ const tmp=compress(mat[r].slice().reverse()).reverse(); for(let c=0;c<4;c++){ newMat[r][c]=tmp[c]; if(newMat[r][c]!==mat[r][c]) moved=true; } } }
-    if(dir==='up'){ for(let c=0;c<4;c++){ const col=[mat[0][c],mat[1][c],mat[2][c],mat[3][c]]; const tmp=compress(col); for(let r=0;r<4;r++){ newMat[r][c]=tmp[r]; if(newMat[r][c]!==mat[r][c]) moved=true; } } }
-    if(dir==='down'){ for(let c=0;c<4;c++){ const col=[mat[0][c],mat[1][c],mat[2][c],mat[3][c]]; const tmp=compress(col.reverse()).reverse(); for(let r=0;r<4;r++){ newMat[r][c]=tmp[r]; if(newMat[r][c]!==mat[r][c]) moved=true; } } }
-    if(!moved) return; grid=newMat.flat(); spawn(); render(); if(score > (localStorage.getItem(HS)|0)){ localStorage.setItem(HS, score); highEl.textContent=score; } if(!canMove()){ if(confirm('Game Over\\nScore: '+score+'\\nOK=Restart')) reset(); }
+// 4: Memory（簡易 4枚）
+function game4(){
+openBlobHTML(`
+let vals=['A','A','B','B'];
+vals.sort(()=>Math.random()-0.5);
+let open=null,score=0;
+vals.forEach((v,i)=>{
+ let c=document.createElement('div');
+ Object.assign(c.style,{display:'inline-block',
+ width:'60px',height:'60px',margin:'10px',background:'#333',
+ color:'#333',fontSize:'40px',textAlign:'center',lineHeight:'60px'});
+ c.textContent=v;
+ c.onclick=()=>{
+  c.style.color='white';
+  if(open===null){open={c,v};}
+  else {
+   if(open.v!==v){
+    setTimeout(()=>{
+      c.style.color='#333';
+      open.c.style.color='#333';
+      open=null;
+    },600);
+   } else {
+    score++;
+    open=null;
+    if(score===2) alert('CLEAR!');
+   }
   }
-  function canMove(){ if(grid.some(v=>v===0)) return true; for(let r=0;r<4;r++) for(let c=0;c<3;c++) if(grid[r*4+c]===grid[r*4+c+1]) return true; for(let c=0;c<4;c++) for(let r=0;r<3;r++) if(grid[r*4+c]===grid[(r+1)*4+c]) return true; return false; }
-  function reset(){ grid = Array.from({length:16},()=>0); score=0; spawn(); spawn(); render(); }
-  render(); spawn(); spawn();
-  document.getElementById('reset').onclick = ()=>reset();
-  document.getElementById('exit').onclick = ()=>{ if(confirm('Exit?')) window.close(); };
-  addEventListener('keydown', e=>{ if(e.key==='ArrowLeft') move('left'); if(e.key==='ArrowRight') move('right'); if(e.key==='ArrowUp') move('up'); if(e.key==='ArrowDown') move('down'); });
-  let sx=0, sy=0; addEventListener('touchstart', e=>{ sx=e.touches[0].clientX; sy=e.touches[0].clientY; });
-  addEventListener('touchend', e=>{ const ex=e.changedTouches[0].clientX, ey=e.changedTouches[0].clientY, dx=ex-sx, dy=ey-sy; if(Math.abs(dx)>Math.abs(dy)){ if(dx>30) move('right'); else if(dx<-30) move('left'); } else { if(dy>30) move('down'); else if(dy<-30) move('up'); } });
-})();
-<\/script></body></html>`;
+ };
+ document.body.appendChild(c);
+});
+`);
 }
 
-/* ----- Start the tool ----- */
-mainLoop();
+// 5: 2048（ミニ）
+function game5(){
+openBlobHTML(`
+document.body.innerHTML='<p style="padding:20px;">2048 Mini（次回強化）</p>';
+`);
+}
 
-})(); // end IIFE
+/////////////////////////////
+// Start
+/////////////////////////////
+mainMenu();
+
+})();
