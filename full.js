@@ -285,12 +285,16 @@
         const sub = prompt('Other Thing:\n1 HTML Tool\n2 Mini Games\nキャンセルで戻る');
         if(sub === null) continue;
         if(sub.trim() === '1'){ openHtmlToolShell(); }
-        else if(sub.trim() === '2'){ openMiniGamesShell(); }
-        else { alert('無効な選択'); }
-      } else {
-        alert('無効な選択です');
-      }
-    }
+else if(sub.trim() === '2'){
+  const g = prompt('Mini Games:\n1 1game\n2 2game\n3 3game\n4 4game\n5 5game\nキャンセルで戻る');
+  if(g === null) continue;
+  if(['1','2','3','4','5'].includes(g.trim())) {
+    openMiniGame(g.trim());
+  } else {
+    alert('無効な選択');
+  }
+}
+
   }
 
   // run
