@@ -1,32 +1,31 @@
-/* main.js
-   Complete Asset Tool: This Page / Other Page (DL + Web See A2) / HTML Tool / Mini Games
-   UI: alert-like modal with Back & Close
-   Put this on your GitHub Pages and load via bookmarklet.
+/* menu.js
+   Alert-only UI menu. Replace BASE_URL below to your GitHub Pages base (no trailing slash).
+   Example: BASE_URL = 'https://yourname.github.io/repo'
 */
 
 (function(){
-  if(window.__ASSETS_TOOL_LOADED) return alert('Tool already loaded');
-  window.__ASSETS_TOOL_LOADED = true;
+  if(window.__ASSETS_MENU_LOADED) { alert('Tool is already loaded'); return; }
+  window.__ASSETS_MENU_LOADED = true;
 
+  const BASE_URL = 'YOUR_BASE_URL_HERE'; // <-- ここを自分の GitHub Pages のベースに書き換えてください（例: https://yourname.github.io/repo）
   const CONFIG = {
     JSZIP_CDN: 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-    CORS_PROXY: '' // if you have a proxy, set e.g. "https://your-proxy.example.com/"
+    CORS_PROXY: '' // 必要なら "https://your-cors-proxy.example.com" を入れる（末尾は/不要）
   };
 
-  // --- helpers ---
-  function loadScript(url){ return new Promise((res,rej)=>{ if(document.querySelector('script[src="'+url+'"]')) return res(); const s=document.createElement('script'); s.src=url; s.onload=res; s.onerror=rej; document.head.appendChild(s); });}
-  function isAbsolute(u){ try{ new URL(u); return true;}catch(e){return false;} }
-  function normalizeUrl(u, base){ try{ return (new URL(u, base)).href; } catch(e){ return u; } }
-  function fileNameFromUrl(u){ try{ const p=new URL(u).pathname; const n=p.split('/').filter(Boolean).pop()||'file'; return decodeURIComponent(n); }catch(e){ return u.replace(/[^a-z0-9.\-_]/gi,'_'); } }
-  function extFromUrl(u){ const m=(u.split('?')[0].match(/\.([a-z0-9]+)$/i)||[])[1]; return m?m.toLowerCase():''; }
-  async function fetchWithFallback(url, opts={}){
+  function normalizeUrl(u, base){
+    try { return (new URL(u, base)).href; } catch(e){ return u; }
+  }
+  function fileNameFromUrl(u){
+    try{ const p=new URL(u).pathname; return decodeURIComponent((p.split('/').filter(Boolean).pop())||'file'); }catch(e){ return u.replace(/[^a-z0-9.\-_]/gi,'_'); }
+  }
+  async function fetchWithFallback(url, opts){
     try{
       const r = await fetch(url, opts);
       if(!r.ok) throw new Error('HTTP '+r.status);
       return r;
-    } catch(e){
+    }catch(e){
       if(CONFIG.CORS_PROXY){
-        // Proxy expects full URL appended; make sure proxy available
         const prox = CONFIG.CORS_PROXY.replace(/\/$/,'') + '/' + url;
         return fetch(prox, opts);
       }
@@ -34,84 +33,30 @@
     }
   }
 
-  // --- modal (alert-like) with back/close ---
-  let historyStack = [];
-  function removeModal(){
-    const old=document.getElementById('__asset_tool_overlay');
-    if(old) old.remove();
-  }
-  function createModal(title, buttons){
-    removeModal();
-    const overlay=document.createElement('div'); overlay.id='__asset_tool_overlay';
-    overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:2147483647;-webkit-overflow-scrolling:touch;';
-    const box=document.createElement('div');
-    box.style.cssText='width:92%;max-width:720px;max-height:88vh;overflow:auto;background:#fff;border-radius:12px;padding:14px;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue","Noto Sans JP";box-shadow:0 12px 40px rgba(0,0,0,0.25)';
-    const h=document.createElement('div'); h.textContent=title; h.style.cssText='font-weight:700;font-size:16px;margin-bottom:10px';
-    box.appendChild(h);
-
-    // content container
-    const content=document.createElement('div'); content.id='__asset_tool_content'; box.appendChild(content);
-
-    // buttons area
-    const btnWrap=document.createElement('div'); btnWrap.style.cssText='margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:center';
-    buttons.forEach(b=>{
-      const btn=document.createElement('button');
-      btn.textContent=b.label;
-      btn.style.cssText='padding:10px 14px;border-radius:8px;border:1px solid #ddd;background:#fafafa;font-size:15px';
-      btn.onclick=()=>{ try{ b.onClick(); }catch(e){ console.error(e); alert('Error: '+(e.message||e)); } };
-      btnWrap.appendChild(btn);
-    });
-
-    // back & close
-    const navRow=document.createElement('div'); navRow.style.cssText='display:flex;justify-content:flex-end;gap:8px;margin-top:12px';
-    if(historyStack.length>0){
-      const back=document.createElement('button'); back.textContent='← 戻る'; back.style.cssText='padding:8px;border-radius:8px'; back.onclick=goBack; navRow.appendChild(back);
-    }
-    const close=document.createElement('button'); close.textContent='✕ 閉じる'; close.style.cssText='padding:8px;border-radius:8px'; close.onclick=()=>{ removeModal(); historyStack=[]; window.__ASSETS_TOOL_ACTIVE=false; }; navRow.appendChild(close);
-
-    box.appendChild(btnWrap); box.appendChild(navRow);
-    overlay.appendChild(box); document.body.appendChild(overlay);
-    return content;
-  }
-  function pushState(fn){ historyStack.push(fn); fn(); }
-  function goBack(){ historyStack.pop(); const prev = historyStack[historyStack.length-1]; prev?prev():removeModal(); }
-
-  // --- Asset discovery on current doc ---
-  function discoverAssetsFromDocument(doc=document){
+  // --- asset discovery on current document ---
+  function discoverAssetsFromDocument(doc){
     const assets = new Map();
-    // index
     try{ assets.set(doc.location.href, {url:doc.location.href, type:'html'}); }catch(e){}
-    // links
-    Array.from(doc.querySelectorAll('link[rel="stylesheet"],link[rel="preload"],link[rel="icon"],link[rel="mask-icon"]')).forEach(l=>{
-      if(l.href) assets.set(normalizeUrl(l.href, doc.baseURI), {url:normalizeUrl(l.href, doc.baseURI), type:'css'});
-    });
-    // scripts
+    Array.from(doc.querySelectorAll('link[rel="stylesheet"],link[rel=icon],link[rel=preload]')).forEach(l=>{ if(l.href) assets.set(normalizeUrl(l.href, doc.baseURI), {url:normalizeUrl(l.href, doc.baseURI), type:'css'}); });
     Array.from(doc.querySelectorAll('script[src]')).forEach(s=>{ if(s.src) assets.set(normalizeUrl(s.src, doc.baseURI), {url:normalizeUrl(s.src, doc.baseURI), type:'js'}); });
-    // images
     Array.from(doc.querySelectorAll('img')).forEach(i=>{ const u=i.currentSrc||i.src; if(u) assets.set(normalizeUrl(u, doc.baseURI), {url:normalizeUrl(u, doc.baseURI), type:'image'}); });
-    // video/audio & sources
-    Array.from(doc.querySelectorAll('video, audio')).forEach(media=>{
-      const s = media.currentSrc || media.src;
-      if(s) assets.set(normalizeUrl(s, doc.baseURI), {url:normalizeUrl(s, doc.baseURI), type:'media'});
-      Array.from(media.querySelectorAll('source')).forEach(src=>{ if(src.src) assets.set(normalizeUrl(src.src, doc.baseURI), {url:normalizeUrl(src.src, doc.baseURI), type:'media'}); });
+    Array.from(doc.querySelectorAll('video, audio')).forEach(m=>{
+      const s = m.currentSrc || m.src; if(s) assets.set(normalizeUrl(s, doc.baseURI), {url:normalizeUrl(s, doc.baseURI), type:'media'});
+      Array.from(m.querySelectorAll('source')).forEach(src=>{ if(src.src) assets.set(normalizeUrl(src.src, doc.baseURI), {url:normalizeUrl(src.src, doc.baseURI), type:'media'}); });
     });
-    // style tags & CSS rules (extract url(...) occurrences)
     Array.from(doc.querySelectorAll('style')).forEach(st=>{
       const text = st.textContent || '';
-      const re = /url\(([^)]+)\)/g; let m;
-      while((m=re.exec(text))){ const raw = m[1].replace(/["']/g,'').trim(); if(raw) assets.set(normalizeUrl(raw, doc.baseURI), {url:normalizeUrl(raw, doc.baseURI), type:'asset'}); }
+      let re = /url\(([^)]+)\)/g, m;
+      while((m=re.exec(text))){ let raw=m[1].replace(/['"]/g,'').trim(); if(raw) assets.set(normalizeUrl(raw, doc.baseURI), {url:normalizeUrl(raw, doc.baseURI), type:'asset'}); }
     });
-    // cssRules from same-origin stylesheets
     try{
       Array.from(doc.styleSheets).forEach(ss=>{
         try{
           Array.from(ss.cssRules||[]).forEach(rule=>{
-            const txt = rule.cssText || '';
-            const re = /url\(([^)]+)\)/g; let m;
-            while((m=re.exec(txt))){ const raw = m[1].replace(/["']/g,'').trim(); if(raw) assets.set(normalizeUrl(raw, doc.baseURI), {url:normalizeUrl(raw, doc.baseURI), type:'asset'}); }
+            const txt = rule.cssText || ''; let re = /url\(([^)]+)\)/g, m;
+            while((m=re.exec(txt))){ let raw=m[1].replace(/['"]/g,'').trim(); if(raw) assets.set(normalizeUrl(raw, doc.baseURI), {url:normalizeUrl(raw, doc.baseURI), type:'asset'}); }
           });
         }catch(e){
-          // cross-origin stylesheet — include href so user can try to fetch via proxy
           if(ss.href) assets.set(normalizeUrl(ss.href, doc.baseURI), {url:normalizeUrl(ss.href, doc.baseURI), type:'css'});
         }
       });
@@ -119,301 +64,236 @@
     return Array.from(assets.values());
   }
 
-  // --- show assets list modal (This Page) with per-item DL ---
-  function showThisPageAssetsList(){
-    const content = createModal('Assets 一覧 — This Page', []);
-    const list = discoverAssetsFromDocument(document);
-    if(list.length===0){ content.innerHTML='<div>アセットが検出されませんでした。</div>'; return; }
-    const ul=document.createElement('div'); ul.style.cssText='display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto';
-    list.forEach(a=>{
-      const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;padding:8px;border-radius:8px;border:1px solid #eee';
-      const icon=document.createElement('div'); icon.textContent = typeIcon(a.type); icon.style.cssText='width:36px';
-      const txt=document.createElement('div'); txt.style.cssText='flex:1;word-break:break-all;font-size:13px'; txt.textContent = fileNameFromUrl(a.url)+'  —  '+shortenUrl(a.url);
-      const dl=document.createElement('button'); dl.textContent='DL'; dl.style.cssText='padding:6px 10px;border-radius:6px'; dl.onclick=()=>downloadUrlDirect(a.url);
-      row.appendChild(icon); row.appendChild(txt); row.appendChild(dl);
-      ul.appendChild(row);
-    });
-    content.appendChild(ul);
+  // --- download helpers ---
+  async function downloadBlobAsFile(blob, filename){
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
   }
-
-  function typeIcon(t){
-    if(!t) return '📄';
-    if(t.includes('image')) return '🖼️';
-    if(t==='css') return '🎨';
-    if(t==='js') return '🟦';
-    if(t==='html') return '🌐';
-    if(t==='media') return '🎵';
-    return '📦';
-  }
-  function shortenUrl(u, len=48){ if(u.length<=len) return u; return u.slice(0, Math.floor(len/2)) + '…' + u.slice(-Math.floor(len/2)); }
-
-  // per-item download using fetch -> blob (handles CORS via proxy fallback)
   async function downloadUrlDirect(url){
     try{
+      alert('ダウンロード開始: ' + url);
       const r = await fetchWithFallback(url);
       if(!r.ok) throw new Error('HTTP '+r.status);
       const blob = await r.blob();
-      const a=document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = fileNameFromUrl(url); document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=>URL.revokeObjectURL(a.href), 30000);
+      downloadBlobAsFile(blob, fileNameFromUrl(url));
+      alert('ダウンロード完了: ' + fileNameFromUrl(url));
     }catch(e){
-      alert('ダウンロードに失敗しました: '+(e.message||e));
+      alert('ダウンロードに失敗しました。\n'+(e.message||e)+'\n（CORS の問題の可能性あり）');
       console.error(e);
     }
   }
 
-  // --- ZIP this page assets preserving simple path structure ---
-  async function zipThisPageAssets(){
+  // --- This Page: list assets via alert and let user pick single item to DL ---
+  async function handleThisPageList(){
+    const assets = discoverAssetsFromDocument(document);
+    if(assets.length === 0){ alert('アセットが検出されませんでした。'); return; }
+    // build a numbered string (may be long)
+    let s = '検出されたアセット一覧：\n';
+    assets.forEach((a,i)=> s += (i+1) + '. ' + fileNameFromUrl(a.url) + ' — ' + a.type + '\n');
+    s += '\nダウンロードしたい番号を入力してください（キャンセルで戻る）';
+    let choice = prompt(s);
+    if(choice === null) return; // cancelled
+    choice = choice.trim();
+    if(!choice) return;
+    const idx = parseInt(choice,10);
+    if(isNaN(idx) || idx < 1 || idx > assets.length){ alert('無効な番号です'); return; }
+    const item = assets[idx-1];
+    await downloadUrlDirect(item.url);
+  }
+
+  // --- This Page: ZIP assets ---
+  async function handleThisPageZip(){
+    if(!confirm('This Page のアセットを ZIP にまとめてダウンロードしますか？\nOK=実行 / Cancel=戻る')) return;
     try{
+      alert('ZIP を作成します。準備してください。処理が長くなる場合があります。');
       await loadScript(CONFIG.JSZIP_CDN);
-      const JSZip = window.JSZip; if(!JSZip) throw new Error('JSZip load failed');
+      if(!window.JSZip) throw new Error('JSZip の読み込みに失敗しました');
+      const JSZip = window.JSZip;
       const zip = new JSZip();
-      // include index.html
       try{ zip.file('index.html', document.documentElement.outerHTML); }catch(e){}
       const assets = discoverAssetsFromDocument(document);
       const folder = zip.folder('assets');
-      const promises = assets.map(async a=>{
+      const tasks = assets.map(async a=>{
         try{
           const r = await fetchWithFallback(a.url);
           if(!r.ok) throw new Error('HTTP '+r.status);
           const blob = await r.blob();
-          // preserve filename
-          const name = fileNameFromUrl(a.url);
-          folder.file(name, blob);
+          const fname = fileNameFromUrl(a.url);
+          folder.file(fname, blob);
         }catch(e){
           console.warn('skip', a.url, e);
         }
       });
-      await Promise.all(promises);
+      await Promise.all(tasks);
       const content = await zip.generateAsync({type:'blob'});
-      const link=document.createElement('a'); link.href=URL.createObjectURL(content); link.download='thispage-assets.zip'; document.body.appendChild(link); link.click(); link.remove();
+      await downloadBlobAsFile(content, 'thispage-assets.zip');
+      alert('ZIP ダウンロード完了');
     }catch(e){
-      alert('ZIP作成失敗: '+(e.message||e));
+      alert('ZIP 作成またはダウンロードに失敗しました。\n'+(e.message||e));
       console.error(e);
     }
   }
 
-  // --- Other Page: fetch page, extract assets, zip OR web-see (full mirror A2) ---
-  async function otherPageActions(){
-    const content = createModal('Other Page', []);
-    // input form
-    const form = document.createElement('div'); form.style.cssText='display:flex;gap:8px;flex-direction:column';
-    const input = document.createElement('input'); input.type='url'; input.placeholder='https://example.com/'; input.style.cssText='padding:8px;border:1px solid #ddd;border-radius:8px';
-    const info = document.createElement('div'); info.style.cssText='font-size:13px;color:#666;margin-bottom:6px'; info.textContent='CORSで失敗した場合はプロキシを試行します。CONFIG.CORS_PROXY を設定してください。';
-    const dlBtn = document.createElement('button'); dlBtn.textContent='Assets DL [URL]'; dlBtn.style.cssText='padding:10px;border-radius:8px';
-    const wsBtn = document.createElement('button'); wsBtn.textContent='Web See (Full Mirror)'; wsBtn.style.cssText='padding:10px;border-radius:8px';
-    form.appendChild(input); form.appendChild(info); form.appendChild(dlBtn); form.appendChild(wsBtn);
-    content.appendChild(form);
-
-    dlBtn.onclick = async ()=>{
-      const url = input.value.trim(); if(!url) return alert('URLを入力してください');
-      removeModal(); await zipRemotePageAssets(url);
-    };
-    wsBtn.onclick = async ()=>{
-      const url = input.value.trim(); if(!url) return alert('URLを入力してください');
-      removeModal(); await webSeeMirror(url); // opens new tab
-    };
+  // --- Other Page: URL input -> Assets DL (zip) OR Web See (full mirror A2) ---
+  async function handleOtherPage(){
+    const url = prompt('対象ページのURLを入力してください（例: https://example.com/）\nキャンセルでメニューに戻ります');
+    if(!url) return;
+    const choice = prompt('選択してください:\n1 = Assets DL [URL]（ZIPで保存）\n2 = Web See（完全ミラー → 新タブで再現）\nキャンセルで戻る');
+    if(!choice) return;
+    if(choice.trim() === '1'){
+      await zipRemotePageAssets(url);
+    } else if(choice.trim() === '2'){
+      await webSeeMirror(url);
+    } else {
+      alert('無効な選択です。');
+    }
   }
 
-  // fetch remote page HTML text (with fallback proxy)
-  async function fetchPageText(url){
-    const r = await fetchWithFallback(url, {mode:'cors'}); if(!r.ok) throw new Error('HTTP '+r.status); return await r.text();
-  }
-
-  // parse asset URLs from HTML text (simple parse)
+  // parse asset URLs from HTML text
   function parseAssetUrlsFromHtml(html, base){
     const urls = new Set();
-    // <link href=...>, <script src=...>, <img src=...>, <source src=...>, url(...) in style tags
-    const reLink = /<(?:link|script|img|source)[^>]*(?:href|src)\s*=\s*['"]?([^'">\s]+)['"]?/ig;
-    let m; while((m=reLink.exec(html))){ urls.add(normalizeUrl(m[1], base)); }
-    // style/url(...)
-    const reUrl = /url\(([^)]+)\)/ig;
-    while((m=reUrl.exec(html))){ let u=m[1].replace(/["']/g,'').trim(); if(u) urls.add(normalizeUrl(u, base)); }
+    const re = /<(?:link|script|img|source)[^>]*(?:href|src)\s*=\s*["']?([^"'\s>]+)["']?/ig;
+    let m;
+    while((m=re.exec(html))){ urls.add(normalizeUrl(m[1], base)); }
+    const re2 = /url\(([^)]+)\)/ig;
+    while((m=re2.exec(html))){ let u=m[1].replace(/["']/g,'').trim(); urls.add(normalizeUrl(u, base)); }
     return Array.from(urls);
   }
 
-  // zip remote page assets (A: for downloading)
-  async function zipRemotePageAssets(url){
+  // zip remote page assets
+  async function zipRemotePageAssets(pageUrl){
     try{
-      await loadScript(CONFIG.JSZIP_CDN); const JSZip=window.JSZip; if(!JSZip) throw new Error('JSZip load failed');
-      const base = url;
-      const html = await fetchPageText(url);
+      if(!confirm('指定ページのAssetsを取得してZIPでダウンロードします。\nOK=実行 / Cancel=戻る')) return;
+      alert('ページを取得しています: ' + pageUrl);
+      const html = await fetchWithFallback(pageUrl).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); });
+      await loadScript(CONFIG.JSZIP_CDN);
+      if(!window.JSZip) throw new Error('JSZip load failed');
+      const JSZip = window.JSZip;
       const zip = new JSZip();
       zip.file('index.html', html);
-      const assetUrls = parseAssetUrlsFromHtml(html, base);
+      const assets = parseAssetUrlsFromHtml(html, pageUrl);
       const folder = zip.folder('assets');
-      // fetch all assets (with concurrency)
-      const tasks = assetUrls.map(async u=>{
+      alert('見つかったアセット数: ' + assets.length + '\n取得を開始します（時間がかかることがあります）');
+      const tasks = assets.map(async u=>{
         try{
           const r = await fetchWithFallback(u);
           if(!r.ok) throw new Error('HTTP '+r.status);
           const blob = await r.blob();
-          // build path preserving pathname
           const p = (new URL(u)).pathname.replace(/^\//,'');
-          const fname = p || fileNameFromUrl(u);
-          folder.file(fname, blob);
+          const name = p || fileNameFromUrl(u);
+          folder.file(name, blob);
         }catch(e){
-          console.warn('skip remote asset', u, e);
+          console.warn('skip', u, e);
         }
       });
       await Promise.all(tasks);
       const content = await zip.generateAsync({type:'blob'});
-      const a=document.createElement('a'); a.href=URL.createObjectURL(content); a.download='remote-assets.zip'; a.click();
+      await downloadBlobAsFile(content, 'remote-assets.zip');
+      alert('リモートZIPダウンロード完了');
     }catch(e){
-      alert('Remote zip failed: '+(e.message||e));
+      alert('Remote ZIP 失敗: '+(e.message||e));
       console.error(e);
     }
   }
 
-  // Web See (Full Mirror - A2): fetch page + assets, rewrite references to blob URLs preserving relative folder names, open new tab normally (no tool UI)
-  async function webSeeMirror(url){
+  // Web See (Full Mirror A2) - rebuild page with blob URLs and open new tab
+  async function webSeeMirror(pageUrl){
     try{
-      // 1. fetch page HTML
-      const html = await fetchPageText(url);
-      // 2. parse asset urls
-      const base = url;
-      const assetUrls = parseAssetUrlsFromHtml(html, base);
-      // 3. fetch assets and map to blob URLs, preserve pathname-like names in a map
-      const blobMap = {}; // original URL -> {blobUrl, path}
-      await Promise.all(assetUrls.map(async u=>{
+      if(!confirm('Web See（完全ミラー）を実行します。\nページの内容を取得して新タブで再現します。\nOK=実行 / Cancel=戻る')) return;
+      alert('ページを取得しています: ' + pageUrl);
+      const html = await fetchWithFallback(pageUrl).then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status); return r.text(); });
+      const assets = parseAssetUrlsFromHtml(html, pageUrl);
+      alert('取得対象のアセット数: ' + assets.length + '\nアセットを取得します（CORSで失敗する場合があります）');
+      const blobMap = {};
+      await Promise.all(assets.map(async u=>{
         try{
           const r = await fetchWithFallback(u);
           if(!r.ok) throw new Error('HTTP '+r.status);
           const blob = await r.blob();
-          const path = (new URL(u)).pathname.replace(/^\//,'');
           const blobUrl = URL.createObjectURL(blob);
-          blobMap[u] = {blobUrl, path};
+          blobMap[u] = blobUrl;
         }catch(e){
-          console.warn('failed fetch asset', u, e);
+          console.warn('asset fetch fail', u, e);
         }
       }));
-      // 4. rewrite html: replace occurrences of original asset URLs with blob URLs (prefer whole URL matches and relative ones)
+      // rewrite HTML: replace absolute occurrences first, then path-only
       let rewritten = html;
-      // replace absolute and relative forms; do absolute first
       Object.keys(blobMap).forEach(orig=>{
-        // escape for regex
-        const esc = orig.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        rewritten = rewritten.split(orig).join(blobMap[orig].blobUrl);
-        // also replace relative occurrences (path-only)
-        const pathname = (new URL(orig)).pathname;
-        const pEsc = pathname.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-        rewritten = rewritten.replace(new RegExp(pEsc, 'g'), blobMap[orig].blobUrl);
+        rewritten = rewritten.split(orig).join(blobMap[orig]);
+        try{
+          const p = (new URL(orig)).pathname;
+          rewritten = rewritten.split(p).join(blobMap[orig]);
+        }catch(e){}
       });
-      // 5. insert <base href="..."> so relative links in remaining references still resolve correctly to original origin if any remain
-      rewritten = rewritten.replace(/<head([^>]*)>/i, `<head$1><base href="${url}">`);
-      // 6. open new tab with rewritten HTML as blob URL
+      // add <base> so remaining relative links point to original site
+      rewritten = rewritten.replace(/<head([^>]*)>/i, `<head$1><base href="${pageUrl}">`);
       const blob = new Blob([rewritten], {type:'text/html'});
       const blobUrl = URL.createObjectURL(blob);
       window.open(blobUrl, '_blank');
+      alert('ミラーを新タブで開きました（完全再現を保証するものではありません）');
     }catch(e){
-      alert('Web See failed: '+(e.message||e)+'\n(CORS/proxy may be needed)');
+      alert('Web See に失敗しました。\n'+(e.message||e));
       console.error(e);
     }
   }
 
-  // --- HTML Tool (upload/edit/download/zip/one-file/preview) ---
-  function openHtmlTool(){
-    const content = createModal('HTML Tool — Upload / Edit / Download', []);
-    const instr=document.createElement('div'); instr.style.cssText='margin-bottom:8px;font-size:13px;color:#444'; instr.textContent='HTML, CSS, JS ファイルをアップロードして編集、個別DL、まとめてZIP、1つにまとめる、別タブでプレビューできます。';
-    content.appendChild(instr);
-    const input=document.createElement('input'); input.type='file'; input.multiple=true; input.accept='.html,.htm,.css,.js,text/*'; input.style.cssText='margin-bottom:8px';
-    content.appendChild(input);
-    const fileArea=document.createElement('div'); fileArea.style.cssText='display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto';
-    content.appendChild(fileArea);
-    let stored=[];
-    input.onchange = async (e)=>{
-      stored=[];
-      const files = Array.from(e.target.files||[]);
-      for(const f of files){ const txt = await f.text(); stored.push({name:f.name, text:txt}); }
-      renderFiles();
-    };
-    function renderFiles(){
-      fileArea.innerHTML='';
-      if(stored.length===0) fileArea.innerHTML='<div>ファイルがありません。アップロードしてください。</div>';
-      stored.forEach((f,i)=>{
-        const card=document.createElement('div'); card.style.cssText='border:1px solid #eee;padding:8px;border-radius:8px';
-        const title=document.createElement('div'); title.textContent=f.name; title.style.cssText='font-weight:600;margin-bottom:6px';
-        const ta=document.createElement('textarea'); ta.value=f.text; ta.style.cssText='width:100%;height:160px;font-family:monospace;font-size:13px';
-        ta.oninput = ()=> stored[i].text = ta.value;
-        const actions=document.createElement('div'); actions.style.cssText='display:flex;gap:6px;margin-top:6px';
-        const dlBtn=document.createElement('button'); dlBtn.textContent='Download'; dlBtn.onclick=()=>{ const blob=new Blob([stored[i].text],{type:'text/plain'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=stored[i].name; a.click(); };
-        const remBtn=document.createElement('button'); remBtn.textContent='Remove'; remBtn.onclick=()=>{ stored.splice(i,1); renderFiles(); };
-        actions.appendChild(dlBtn); actions.appendChild(remBtn);
-        card.appendChild(title); card.appendChild(ta); card.appendChild(actions);
-        fileArea.appendChild(card);
-      });
+  // simple loadScript
+  function loadScript(url){
+    return new Promise((res, rej)=>{
+      if(document.querySelector('script[src="'+url+'"]')) return res();
+      const s = document.createElement('script'); s.src = url;
+      s.onload = ()=>res(); s.onerror = (e)=>rej(e);
+      document.head.appendChild(s);
+    });
+  }
+
+  // --- HTML Tool and Mini Games shells (empty frames as requested) ---
+  function openHtmlToolShell(){
+    alert('HTML Tool を起動します。現在はシェル（簡易）です。\n次の実装でアップロード/編集機能を追加します。');
+    // could load a full htmltool.js from BASE_URL in future:
+    // let url = BASE_URL + '/htmltool.js'; loadScript(url).then(()=>{/*...*/}).catch(e=>alert('failed to load module'));
+  }
+  function openMiniGamesShell(){
+    alert('Mini Games の枠を開きます。現在は空の枠です。');
+    // open an about page or blank tab
+    const txt = '<!doctype html><html><meta charset="utf-8"><title>Mini Games (empty)</title><body style="font-family:system-ui;padding:20px">Mini Games: 未実装（枠のみ）</body></html>';
+    const blob = new Blob([txt], {type:'text/html'}); window.open(URL.createObjectURL(blob), '_blank');
+  }
+
+  // --- main loop using prompt/confirm/alert only ---
+  async function mainMenu(){
+    alert('Assets Tool 起動');
+    while(true){
+      const v = prompt('機能を選んでください（番号を入力）:\n1 This Page\n2 Other Page\n3 Other Thing\nキャンセルで終了');
+      if(v === null) { alert('終了します'); break; }
+      const choice = v.trim();
+      if(choice === '1'){
+        // This Page submenu via prompt/confirm
+        const sub = prompt('This Page:\n1 Assets 一覧 (個別DL)\n2 Assets DL [Here] (ZIP)\nキャンセルで戻る');
+        if(sub === null) continue;
+        if(sub.trim() === '1'){ await handleThisPageList(); }
+        else if(sub.trim() === '2'){ await handleThisPageZip(); }
+        else { alert('無効な選択'); }
+      } else if(choice === '2'){
+        await handleOtherPage();
+      } else if(choice === '3'){
+        const sub = prompt('Other Thing:\n1 HTML Tool\n2 Mini Games\nキャンセルで戻る');
+        if(sub === null) continue;
+        if(sub.trim() === '1'){ openHtmlToolShell(); }
+        else if(sub.trim() === '2'){ openMiniGamesShell(); }
+        else { alert('無効な選択'); }
+      } else {
+        alert('無効な選択です');
+      }
     }
-    // action buttons
-    const zipBtn=document.createElement('button'); zipBtn.textContent='まとめてZIPでダウンロード'; zipBtn.style.cssText='margin-top:8px;padding:10px;border-radius:8px';
-    zipBtn.onclick = async ()=>{
-      if(stored.length===0) return alert('ファイルがありません');
-      await loadScript(CONFIG.JSZIP_CDN); const JSZip=window.JSZip; if(!JSZip) return alert('JSZip load failed');
-      const zip=new JSZip(); stored.forEach(f=>zip.file(f.name, f.text));
-      const blob = await zip.generateAsync({type:'blob'});
-      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='files.zip'; a.click();
-    };
-    const oneBtn=document.createElement('button'); oneBtn.textContent='一つのHTMLにまとめてダウンロード'; oneBtn.style.cssText='margin-top:8px;padding:10px;border-radius:8px';
-    oneBtn.onclick = ()=>{
-      if(stored.length===0) return alert('ファイルがありません');
-      // pick first HTML as base or create minimal
-      const htmlFile = stored.find(x=>x.name.match(/\.html?$/i)) || {text:'<!doctype html><html><head><meta charset="utf-8"><title>Combined</title></head><body><div id="app"></div></body></html>'};
-      let out = htmlFile.text;
-      const cssText = stored.filter(f=>f.name.match(/\.css$/i)).map(f=>'/* '+f.name+' */\n'+f.text).join('\n');
-      const jsText  = stored.filter(f=>f.name.match(/\.js$/i)).map(f=>'// '+f.name+'\n'+f.text).join('\n');
-      out = out.replace(/<\/head>/i, `<style>\n${cssText}\n</style>\n</head>`);
-      out = out.replace(/<\/body>/i, `<script>\n${jsText}\n</script>\n</body>`);
-      const blob = new Blob([out], {type:'text/html'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='combined.html'; a.click();
-    };
-    const previewBtn=document.createElement('button'); previewBtn.textContent='閲覧・実行確認 (別タブ)'; previewBtn.style.cssText='margin-top:8px;padding:10px;border-radius:8px';
-    previewBtn.onclick = ()=>{
-      if(stored.length===0) return alert('ファイルがありません');
-      const htmlFile = stored.find(x=>x.name.match(/\.html?$/i)) || {text:'<!doctype html><html><head><meta charset="utf-8"><title>Preview</title></head><body><div>No HTML</div></body></html>'};
-      let out = htmlFile.text;
-      const cssText = stored.filter(f=>f.name.match(/\.css$/i)).map(f=>'/* '+f.name+' */\n'+f.text).join('\n');
-      const jsText  = stored.filter(f=>f.name.match(/\.js$/i)).map(f=>'// '+f.name+'\n'+f.text).join('\n');
-      out = out.replace(/<\/head>/i, `<style>\n${cssText}\n</style>\n</head>`);
-      out = out.replace(/<\/body>/i, `<script>\n${jsText}\n</script>\n</body>`);
-      const blob=new Blob([out], {type:'text/html'}); window.open(URL.createObjectURL(blob), '_blank');
-    };
-
-    content.appendChild(zipBtn); content.appendChild(oneBtn); content.appendChild(previewBtn);
   }
 
-  // --- Mini Games (open sample HTMLs in new tabs) ---
-  const miniGames = [
-    {name:'1game', html:`<!doctype html><html><head><meta charset="utf-8"><title>1game</title></head><body style="margin:0;display:flex;align-items:center;justify-content:center;height:100vh;background:#111;color:#fff"><canvas id="c"></canvas><script>const c=document.getElementById('c');c.width=innerWidth;c.height=innerHeight;const ctx=c.getContext('2d');let x=0;function tick(){ctx.fillStyle='black';ctx.fillRect(0,0,c.width,c.height);ctx.fillStyle='white';ctx.fillRect(x,50,60,60);x=(x+3)%(c.width+100);requestAnimationFrame(tick);}tick();</script></body></html>`},
-    {name:'2game', html:`<!doctype html><html><head><meta charset="utf-8"><title>2game</title></head><body style="font-family:system-ui"><h1 style="text-align:center">2game - Click to spawn</h1><div id="area" style="height:80vh;position:relative"></div><script>const a=document.getElementById('area');a.onclick=(e)=>{const d=document.createElement('div');d.style='width:30px;height:30px;background:#f66;border-radius:50%;position:absolute;left:'+e.clientX+'px;top:'+e.clientY+'px;transform:translate(-50%,-50%);';a.appendChild(d);setTimeout(()=>d.remove(),1500);};</script></body></html>`},
-    {name:'3game', html:`<!doctype html><html><head><meta charset="utf-8"><title>3game</title></head><body style="font-family:system-ui"><h1 style="text-align:center">3game - Button Counter</h1><button id="b" style="display:block;margin:20px auto;padding:10px 16px">Press</button><script>let n=0;document.getElementById('b').onclick=()=>{n++;alert('Count: '+n)}</script></body></html>`},
-    {name:'4game', html:`<!doctype html><html><head><meta charset="utf-8"><title>4game</title></head><body style="margin:0"><canvas id="g" style="width:100%;height:100vh"></canvas><script>const c=document.getElementById('g');c.width=innerWidth;c.height=innerHeight;const ctx=c.getContext('2d');let balls=[];onpointerdown=e=>{balls.push({x:e.clientX,y:e.clientY,vx:(Math.random()-0.5)*6,vy:(Math.random()-0.5)*6,r:10+Math.random()*20})};function f(){ctx.clearRect(0,0,c.width,c.height);balls.forEach(b=>{b.x+=b.vx;b.y+=b.vy;b.vy+=0.2;ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,6.28);ctx.fillStyle='rgba(0,150,200,0.7)';ctx.fill();});requestAnimationFrame(f);}f();</script></body></html>`},
-    {name:'5game', html:`<!doctype html><html><head><meta charset="utf-8"><title>5game</title></head><body style="font-family:system-ui;display:flex;flex-direction:column;align-items:center"><h2>5game - typing test</h2><div id="q">Type: hello world</div><input id="i" autofocus style="font-size:18px;padding:8px;margin-top:10px"><script>const target='hello world';const i=document.getElementById('i');i.oninput=()=>{if(i.value.trim()===target){alert('OK!');i.value='';}}</script></body></html>`}
-  ];
-  function openMiniGame(name){
-    const g = miniGames.find(x=>x.name===name);
-    if(!g) return alert('not found');
-    const blob = new Blob([g.html], {type:'text/html'}); window.open(URL.createObjectURL(blob), '_blank');
-  }
-
-  // --- Top Menu ---
-  function menuTop(){
-    const content = createModal('Select', [
-      {label:'This Page', onClick: ()=> pushState(menuThisPage)},
-      {label:'Other Page', onClick: ()=> pushState(otherPageActions)},
-      {label:'Other Thing', onClick: ()=> pushState(menuOtherThing)}
-    ]);
-  }
-  function menuThisPage(){
-    createModal('This Page', [
-      {label:'Assets 一覧', onClick: ()=> showThisPageAssetsList()},
-      {label:'Assets DL [Here]', onClick: ()=> { removeModal(); zipThisPageAssets(); }}
-    ]);
-  }
-  function menuOtherThing(){
-    createModal('Other Thing', [
-      {label:'HTML Tool', onClick: ()=> openHtmlTool()},
-      {label:'Mini Games', onClick: ()=> createModal('Mini Games', miniGames.map(m=>({label:m.name, onClick: ()=> openMiniGame(m.name)})))}
-    ]);
-  }
-
-  // start
-  historyStack=[]; pushState(menuTop);
+  // run
+  mainMenu();
 
 })();
